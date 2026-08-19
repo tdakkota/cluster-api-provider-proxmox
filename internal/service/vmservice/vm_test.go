@@ -177,10 +177,18 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions_TemplateSelector(t *testing.T
 	}
 
 	// ResolutionPolicy is not set on the TemplateSelector in this test, so the default
-	// policy is "exact". The vmservice must therefore pass "exact" to FindVMTemplateByTags.
+	// policy is "exact". The vmservice must therefore pass "exact" to FindVMTemplatesByTags.
+	//
+	// Only node1 holds the template, so node1 is the only placement a clone can
+	// succeed on even though node2 is allowed and has more memory free: without
+	// shared storage the clone cannot leave the node holding its source.
+	// A single copy leaves placement unrestricted: the copy's node is the clone
+	// source, but the machine may still be scheduled elsewhere, which is what
+	// shared storage supports and what this provider did before per-node copies
+	// were understood.
 	proxmoxClient.EXPECT().
-		FindVMTemplateByTags(context.Background(), vmTemplateTags, string(infrav1.TemplateMatchPolicyExact)).
-		Return("node1", 123, nil).
+		FindVMTemplatesByTags(context.Background(), vmTemplateTags, string(infrav1.TemplateMatchPolicyExact)).
+		Return(map[string][]int32{"node1": {123}}, nil).
 		Once()
 
 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
@@ -195,6 +203,71 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions_TemplateSelector(t *testing.T
 	require.Equal(t, "node2", *machineScope.ProxmoxMachine.Status.ProxmoxNode)
 	require.True(t, machineScope.InfraCluster.ProxmoxCluster.HasMachine(machineScope.Name(), false))
 	requireConditionIsFalse(t, machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
+}
+
+func TestEnsureVirtualMachine_CreateVM_TemplateSelector_PerNodeCopies(t *testing.T) {
+	vmTemplateTags := []string{"foo", "bar"}
+
+	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
+	machineScope.ProxmoxMachine.Spec.VirtualMachineCloneSpec = infrav1.VirtualMachineCloneSpec{
+		TemplateSource: infrav1.TemplateSource{
+			TemplateSelector: &infrav1.TemplateSelector{
+				MatchTags: vmTemplateTags,
+			},
+		},
+	}
+	machineScope.ProxmoxMachine.Spec.AllowedNodes = []string{"node1", "node2"}
+
+	// A cluster without shared storage keeps an identically tagged copy of the
+	// template on every node, with a VMID of its own. Both are eligible, so the
+	// scheduler picks on memory as usual -- and the clone must then source from
+	// the copy on the node it picked, not from whichever copy was listed first.
+	proxmoxClient.EXPECT().
+		FindVMTemplatesByTags(context.Background(), vmTemplateTags, string(infrav1.TemplateMatchPolicyExact)).
+		Return(map[string][]int32{"node1": {123}, "node2": {456}}, nil).
+		Once()
+
+	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node1", int64(100)).Return(0, nil).Once()
+	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node2", int64(100)).Return(^uint64(0), nil).Once()
+
+	expectedOptions := proxmox.VMCloneRequest{Node: "node2", Name: "test", Target: "node2", Full: true}
+	response := proxmox.VMCloneResponse{NewID: 456, Task: newTask()}
+	proxmoxClient.EXPECT().CloneVM(context.Background(), 456, expectedOptions).Return(response, nil).Once()
+
+	requeue, err := ensureVirtualMachine(context.Background(), machineScope)
+	require.NoError(t, err)
+	require.True(t, requeue)
+
+	require.Equal(t, "node2", *machineScope.ProxmoxMachine.Status.ProxmoxNode)
+}
+
+func TestEnsureVirtualMachine_CreateVM_TemplateSelector_NoCopyOnAllowedNodes(t *testing.T) {
+	vmTemplateTags := []string{"foo", "bar"}
+
+	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
+	machineScope.ProxmoxMachine.Spec.VirtualMachineCloneSpec = infrav1.VirtualMachineCloneSpec{
+		TemplateSource: infrav1.TemplateSource{
+			TemplateSelector: &infrav1.TemplateSelector{
+				MatchTags: vmTemplateTags,
+			},
+		},
+	}
+	machineScope.ProxmoxMachine.Spec.AllowedNodes = []string{"node2"}
+
+	// The template exists, but not on any node the machine may be placed on.
+	// Failing here is the point: scheduling onto node2 would be accepted and
+	// then rejected by Proxmox at clone time with "VM uses local storage".
+	proxmoxClient.EXPECT().
+		FindVMTemplatesByTags(context.Background(), vmTemplateTags, string(infrav1.TemplateMatchPolicyExact)).
+		Return(map[string][]int32{"node1": {123}, "node3": {789}}, nil).
+		Once()
+
+	_, err := createVM(context.Background(), machineScope)
+	require.ErrorIs(t, err, scheduler.ErrNoTemplateOnAllowedNodes)
+
+	cond := conditions.Get(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
 }
 
 func TestEnsureVirtualMachine_CreateVM_FullOptions_TemplateSelector_VMTemplateNotFound(t *testing.T) {
@@ -217,8 +290,7 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions_TemplateSelector_VMTemplateNo
 	machineScope.ProxmoxMachine.Spec.Storage = new("storage")
 	machineScope.ProxmoxMachine.Spec.AllowedNodes = []string{"node2"}
 
-	proxmoxClient.EXPECT().FindVMTemplateByTags(context.Background(), vmTemplateTags, "exact").Return("", -1, goproxmox.ErrTemplateNotFound).Once()
-	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node2", int64(100)).Return(^uint64(0), nil).Once()
+	proxmoxClient.EXPECT().FindVMTemplatesByTags(context.Background(), vmTemplateTags, "exact").Return(nil, goproxmox.ErrTemplateNotFound).Once()
 
 	_, err := createVM(ctx, machineScope)
 
@@ -234,10 +306,10 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode(t *testing.T) {
 	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
 	machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes = []string{"node1", "node2", "node3"}
 
-	selectNextNode = func(context.Context, *scope.MachineScope) (string, error) {
+	selectNextNode = func(context.Context, *scope.MachineScope, []string) (string, error) {
 		return "node3", nil
 	}
-	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVM })
+	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVMOnNodes })
 
 	expectedOptions := proxmox.VMCloneRequest{Node: "node1", Name: "test", Target: "node3", Full: true}
 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
@@ -257,10 +329,10 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode_MachineAllowedNodes(t *testing
 	machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes = []string{"node1", "node2", "node3", "node4"}
 	machineScope.ProxmoxMachine.Spec.AllowedNodes = []string{"node1", "node2"}
 
-	selectNextNode = func(context.Context, *scope.MachineScope) (string, error) {
+	selectNextNode = func(context.Context, *scope.MachineScope, []string) (string, error) {
 		return "node2", nil
 	}
-	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVM })
+	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVMOnNodes })
 
 	expectedOptions := proxmox.VMCloneRequest{Node: "node1", Name: "test", Target: "node2", Full: true}
 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
@@ -279,10 +351,10 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode_InsufficientMemory(t *testing.
 	machineScope, _, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
 	machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes = []string{"node1"}
 
-	selectNextNode = func(context.Context, *scope.MachineScope) (string, error) {
+	selectNextNode = func(context.Context, *scope.MachineScope, []string) (string, error) {
 		return "", fmt.Errorf("error: %w", scheduler.InsufficientMemoryError{})
 	}
-	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVM })
+	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVMOnNodes })
 
 	_, err := ensureVirtualMachine(context.Background(), machineScope)
 	require.Error(t, err)

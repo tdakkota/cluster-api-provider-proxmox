@@ -19,6 +19,7 @@ package vmservice
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 
@@ -438,6 +439,27 @@ func getClusterAPIMachineAddresses(scope *scope.MachineScope) ([]clusterv1.Machi
 	return addresses, nil
 }
 
+// templateNodeCandidates returns the nodes placement must be restricted to, or
+// nil to leave it unrestricted.
+//
+// Copies on more than one node only happen when the template cannot be cloned
+// across nodes, which is to say its storage is not shared: the copies exist
+// precisely so that every node can serve one locally. Placement then has to
+// follow them.
+//
+// A single copy is left unrestricted. Its node owns the template's config, but
+// on shared storage any node can still be a clone target, and pinning every
+// machine to the config's node would take away spreading that works today.
+// Restricting only the multi-copy case keeps this additive: it is the case
+// upstream rejects outright with "found N VM templates".
+func templateNodeCandidates(templatesByNode map[string][]int32) []string {
+	if len(templatesByNode) < 2 {
+		return nil
+	}
+
+	return slices.Sorted(maps.Keys(templatesByNode))
+}
+
 func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneResponse, error) {
 	vmid, err := getVMID(ctx, scope)
 	if err != nil {
@@ -479,28 +501,20 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
 		scope.InfraCluster.ProxmoxCluster.Status.NodeLocations = new(infrav1.NodeLocations)
 	}
 
-	if len(scope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes) > 0 || len(scope.ProxmoxMachine.Spec.AllowedNodes) > 0 {
-		var err error
-		options.Target, err = selectNextNode(ctx, scope)
-		if err != nil {
-			if errors.As(err, &scheduler.InsufficientMemoryError{}) {
-				conditions.Set(scope.ProxmoxMachine, metav1.Condition{
-					Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
-					Status:  metav1.ConditionFalse,
-					Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason,
-					Message: err.Error(),
-				})
-			}
-			return proxmox.VMCloneResponse{}, err
-		}
-	}
-
+	// The template has to be resolved before the node is chosen, not after: a
+	// clone cannot cross nodes unless the storage is shared, so the set of
+	// nodes holding a copy of the template is what the scheduler may choose
+	// from. Picking a node first and resolving the template afterwards is what
+	// makes Proxmox reject the clone with "VM uses local storage" once a
+	// cluster keeps one copy of the template per node.
 	templateID := scope.ProxmoxMachine.GetTemplateID()
+
+	var templatesByNode map[string][]int32
 	if templateID == -1 {
 		var err error
 		templateSelectorTags := scope.ProxmoxMachine.GetTemplateSelectorTags()
 		templateMatchPolicy := string(scope.ProxmoxMachine.GetTemplateMatchPolicy())
-		options.Node, templateID, err = scope.InfraCluster.ProxmoxClient.FindVMTemplateByTags(ctx, templateSelectorTags, templateMatchPolicy)
+		templatesByNode, err = scope.InfraCluster.ProxmoxClient.FindVMTemplatesByTags(ctx, templateSelectorTags, templateMatchPolicy)
 
 		if err != nil {
 			if errors.Is(err, goproxmox.ErrTemplateNotFound) {
@@ -513,6 +527,39 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
 			}
 			return proxmox.VMCloneResponse{}, err
 		}
+	}
+
+	if len(scope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes) > 0 || len(scope.ProxmoxMachine.Spec.AllowedNodes) > 0 {
+		var err error
+		options.Target, err = selectNextNode(ctx, scope, templateNodeCandidates(templatesByNode))
+		if err != nil {
+			if errors.As(err, &scheduler.InsufficientMemoryError{}) || errors.Is(err, scheduler.ErrNoTemplateOnAllowedNodes) {
+				conditions.Set(scope.ProxmoxMachine, metav1.Condition{
+					Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
+					Status:  metav1.ConditionFalse,
+					Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason,
+					Message: err.Error(),
+				})
+			}
+			return proxmox.VMCloneResponse{}, err
+		}
+	}
+
+	if templateID == -1 {
+		// Clone from the copy on the node the machine is going to live on. With
+		// no allowedNodes there is nothing to place against, so the lowest node
+		// name wins and the destination follows the template instead.
+		// Clone from the copy on the node the machine is going to live on. When
+		// placement was not restricted to the copies -- a single copy, possibly
+		// on shared storage -- the node holding it stays the clone source and
+		// the target may still be elsewhere, exactly as before.
+		sourceNode := options.Target
+		if _, ok := templatesByNode[sourceNode]; !ok {
+			sourceNode = slices.Sorted(maps.Keys(templatesByNode))[0]
+		}
+
+		options.Node = sourceNode
+		templateID = templatesByNode[sourceNode][0]
 	}
 	res, err := scope.InfraCluster.ProxmoxClient.CloneVM(ctx, int(templateID), options)
 	if err != nil {
@@ -583,7 +630,7 @@ func getUsedVMIDs(ctx context.Context, scope *scope.MachineScope) ([]int64, erro
 	return usedVMIDs, nil
 }
 
-var selectNextNode = scheduler.ScheduleVM
+var selectNextNode = scheduler.ScheduleVMOnNodes
 
 func unmountCloudInitISO(ctx context.Context, machineScope *scope.MachineScope) error {
 	return machineScope.InfraCluster.ProxmoxClient.UnmountCloudInitISO(ctx, machineScope.VirtualMachine, inject.CloudInitISODevice)
