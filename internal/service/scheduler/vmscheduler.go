@@ -74,7 +74,7 @@ func selectNode(
 ) (string, error) {
 	byMemory := make(sortByAvailableMemory, len(allowedNodes))
 	for i, nodeName := range allowedNodes {
-		mem, err := client.GetReservableMemoryBytes(ctx, nodeName, schedulerHints.GetMemoryAdjustment())
+		mem, err := client.GetReservableMemoryBytes(ctx, nodeName, schedulerHints.GetMemoryAdjustment(), schedulerHints.ShouldReserveStoppedGuestMemory())
 		if err != nil {
 			return "", err
 		}
@@ -132,7 +132,7 @@ func selectNode(
 }
 
 type resourceClient interface {
-	GetReservableMemoryBytes(context.Context, string, int64) (uint64, error)
+	GetReservableMemoryBytes(context.Context, string, int64, bool) (uint64, error)
 }
 
 type nodeInfo struct {

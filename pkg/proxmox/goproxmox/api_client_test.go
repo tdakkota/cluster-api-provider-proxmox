@@ -148,7 +148,7 @@ func TestProxmoxAPIClient_GetReservableMemoryBytes(t *testing.T) {
 			httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/lxc`,
 				newJSONResponder(200, proxmox.Containers{}))
 
-			reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", test.nodeMemoryAdjustment)
+			reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", test.nodeMemoryAdjustment, true)
 			require.NoError(t, err)
 			require.Equal(t, test.expect, reservable)
 		})
@@ -158,7 +158,7 @@ func TestProxmoxAPIClient_GetReservableMemoryBytes(t *testing.T) {
 		client := newTestClient(t)
 		httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/status`,
 			newJSONResponder(401, "Forbidden"))
-		reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", 0)
+		reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", 0, true)
 		require.Error(t, err)
 		require.Equal(t, uint64(0), reservable)
 		require.Equal(t,
@@ -172,7 +172,7 @@ func TestProxmoxAPIClient_GetReservableMemoryBytes(t *testing.T) {
 			newJSONResponder(200, proxmox.Node{Memory: proxmox.Memory{Total: 30}, Name: "test"}))
 		httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu`,
 			newJSONResponder(401, nil))
-		reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", 1)
+		reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", 1, true)
 		require.Error(t, err)
 		require.Equal(t, uint64(0), reservable)
 		require.Equal(t,
@@ -737,6 +737,60 @@ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
 			running, err := client.CloudInitStatus(context.Background(), vm)
 			require.Equal(t, err, test.err)
 			require.Equal(t, test.running, running)
+		})
+	}
+}
+
+func TestProxmoxAPIClient_GetReservableMemoryBytes_StoppedGuests(t *testing.T) {
+	guest := func(name string, vmid int, maxMem uint64, status string) map[string]any {
+		return map[string]any{
+			"name": name, "vmid": vmid, "maxmem": maxMem, "status": status,
+			"mem": 0, "uptime": 0, "disk": 0, "diskread": 0, "diskwrite": 0,
+			"cpu": 0, "cpus": 1, "netin": 0, "netout": 0, "maxdisk": 0,
+		}
+	}
+
+	tests := []struct {
+		name                 string
+		reserveStoppedGuests bool
+		expect               uint64
+	}{
+		{
+			// 100 - 10 running - 40 stopped - 5 paused - 20 stopped container.
+			name:                 "stopped guests reserved",
+			reserveStoppedGuests: true,
+			expect:               25,
+		},
+		{
+			// 100 - 10 running - 5 paused. A paused guest still has its memory
+			// resident, so it is charged either way.
+			name:                 "stopped guests released",
+			reserveStoppedGuests: false,
+			expect:               85,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newTestClient(t)
+			httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/status`,
+				newJSONResponder(200, proxmox.Node{Memory: proxmox.Memory{Total: 100}, Name: "test"}))
+
+			httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu`,
+				newJSONResponder(200, []any{
+					guest("running-worker", 1111, 10, "running"),
+					guest("stopped-worker", 2222, 40, "stopped"),
+					guest("paused-worker", 3333, 5, "paused"),
+				}))
+
+			httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/lxc`,
+				newJSONResponder(200, []any{
+					guest("stopped-ct", 4444, 20, "stopped"),
+				}))
+
+			reservable, err := client.GetReservableMemoryBytes(context.Background(), "test", 100, test.reserveStoppedGuests)
+			require.NoError(t, err)
+			require.Equal(t, test.expect, reservable)
 		})
 	}
 }

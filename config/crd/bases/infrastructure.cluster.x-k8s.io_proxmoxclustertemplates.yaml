@@ -1117,6 +1117,20 @@ spec:
                             format: int64
                             minimum: 0
                             type: integer
+                          reserveStoppedGuestMemory:
+                            description: |-
+                              reserveStoppedGuestMemory keeps the configured memory of stopped VMs and
+                              containers reserved on a node, as though they were running, so that every
+                              guest already placed on that node could be started at once.
+
+                              A stopped guest occupies no host memory, so setting this to false judges a
+                              node by what is actually running on it. That allows placement onto memory
+                              which is free today but would be contended if the stopped guests were
+                              started, so it suits hosts whose stopped guests are abandoned rather than
+                              merely idle.
+
+                              Defaults to true, which is the conservative accounting.
+                            type: boolean
                         type: object
                       zoneConfig:
                         description: zoneConfig defines a IPAddress config per deployment
