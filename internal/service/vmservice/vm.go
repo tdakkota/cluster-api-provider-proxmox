@@ -228,9 +228,14 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
 		// Create the VM.
 		resp, err := createVM(ctx, machineScope)
 		if err != nil {
-			// Only set CloningFailed if createVM didn't already set a terminal
-			// failure reason (e.g. VMProvisionFailed for insufficient resources).
-			if conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition) != infrav1.ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason {
+			// Keep the reason createVM set when it says more than a generic clone
+			// failure does: VMProvisionFailed is terminal, WaitingForPlacement
+			// says no node can host the machine yet. Overwriting either with
+			// CloningFailed loses the only account of what is actually wrong.
+			switch conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition) {
+			case infrav1.ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason,
+				infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason:
+			default:
 				conditions.Set(machineScope.ProxmoxMachine, metav1.Condition{
 					Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
 					Status:  metav1.ConditionFalse,
@@ -482,7 +487,7 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
 				conditions.Set(scope.ProxmoxMachine, metav1.Condition{
 					Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
 					Status:  metav1.ConditionFalse,
-					Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason,
+					Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason,
 					Message: err.Error(),
 				})
 			}
