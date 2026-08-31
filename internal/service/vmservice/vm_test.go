@@ -1014,3 +1014,31 @@ func TestEnsureVirtualMachine_CreateVM_InsufficientMemory_IsNotTerminal(t *testi
 	)
 	require.False(t, machineScope.HasFailed(), "a full cluster must not latch the machine as failed")
 }
+
+func TestEnsureVirtualMachine_CreateVM_NoTemplateOnAllowedNodes_IsNotTerminal(t *testing.T) {
+	vmTemplateTags := []string{"foo", "bar"}
+
+	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
+	machineScope.ProxmoxMachine.Spec.VirtualMachineCloneSpec = infrav1.VirtualMachineCloneSpec{
+		TemplateSource: infrav1.TemplateSource{
+			TemplateSelector: &infrav1.TemplateSelector{
+				MatchTags: vmTemplateTags,
+			},
+		},
+	}
+	machineScope.ProxmoxMachine.Spec.AllowedNodes = []string{"node2"}
+
+	proxmoxClient.EXPECT().
+		FindVMTemplatesByTags(context.Background(), vmTemplateTags, string(infrav1.TemplateMatchPolicyExact)).
+		Return(map[string][]int32{"node1": {123}, "node3": {789}}, nil).
+		Once()
+
+	_, err := createVM(context.Background(), machineScope)
+	require.ErrorIs(t, err, scheduler.ErrNoTemplateOnAllowedNodes)
+
+	require.Equal(t,
+		infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason,
+		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition),
+	)
+	require.False(t, machineScope.HasFailed(), "copying the template must be enough to unblock the machine")
+}
