@@ -1026,6 +1026,47 @@ spec:
                           externalManagedControlPlane can be enabled to allow externally managed Control Planes to patch the
                           Proxmox cluster with the Load Balancer IP provided by Control Plane provider.
                         type: boolean
+                      failureDomains:
+                        description: failureDomains defines the failure domains machines
+                          may be placed in.
+                        items:
+                          description: |-
+                            ProxmoxFailureDomain is a set of Proxmox nodes machines may be placed on,
+                            sharing a network zone.
+                          properties:
+                            controlPlane:
+                              default: true
+                              description: controlPlane declares whether control plane
+                                machines may be placed here.
+                              type: boolean
+                            name:
+                              description: name uniquely identifies the failure domain
+                                within the cluster.
+                              maxLength: 256
+                              minLength: 1
+                              type: string
+                            nodes:
+                              description: nodes are the Proxmox nodes machines in
+                                this domain may be cloned onto.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                              x-kubernetes-list-type: set
+                            zone:
+                              description: |-
+                                zone names the zoneConfig entry supplying addresses and DNS for this
+                                domain. Defaults to name.
+                              type: string
+                          required:
+                          - name
+                          - nodes
+                          type: object
+                        maxItems: 32
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
                       ipv4Config:
                         description: |-
                           ipv4Config contains information about available IPv4 address pools and the gateway.
