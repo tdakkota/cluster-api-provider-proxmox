@@ -81,7 +81,7 @@ func selectNode(
 		byMemory[i] = nodeInfo{Name: nodeName, AvailableMemory: mem}
 	}
 
-	sort.Sort(byMemory)
+	sort.Stable(byMemory)
 
 	requestedMemory := uint64(ptr.Deref(machine.Spec.MemoryMiB, 0)) * 1024 * 1024 // convert to bytes
 	if requestedMemory > byMemory[0].AvailableMemory {
@@ -107,12 +107,16 @@ func selectNode(
 	byReplicas := make(sortByReplicas, len(byMemory))
 	copy(byReplicas, byMemory)
 
-	sort.Sort(byReplicas)
+	sort.Stable(byReplicas)
 
+	// Placement balances replicas: of the nodes that can fit the VM, the one
+	// already hosting the fewest machines of this role wins, which spreads a
+	// role across the cluster. byMemory[0] is known to fit from the check above
+	// and is also in byReplicas, so the loop always assigns; the initial value
+	// only keeps the function total.
 	decision := byMemory[0].Name
 	for _, info := range byReplicas {
-		// distribute round-robin when memory allows it
-		if requestedMemory < info.AvailableMemory {
+		if requestedMemory <= info.AvailableMemory {
 			decision = info.Name
 			break
 		}
@@ -146,7 +150,17 @@ type sortByReplicas []nodeInfo
 func (a sortByReplicas) Len() int      { return len(a) }
 func (a sortByReplicas) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a sortByReplicas) Less(i, j int) bool {
-	return a[i].ScheduledVMs < a[j].ScheduledVMs
+	if a[i].ScheduledVMs != a[j].ScheduledVMs {
+		return a[i].ScheduledVMs < a[j].ScheduledVMs
+	}
+	// Nodes tie on replica count constantly in a homogeneous cluster. Break the
+	// tie on memory, then on name, so the placement is a total order and repeated
+	// calls with the same input always pick the same node.
+	if a[i].AvailableMemory != a[j].AvailableMemory {
+		return a[i].AvailableMemory > a[j].AvailableMemory
+	}
+
+	return a[i].Name < a[j].Name
 }
 
 func (a sortByReplicas) String() string {
@@ -160,7 +174,11 @@ func (a sortByAvailableMemory) Len() int      { return len(a) }
 func (a sortByAvailableMemory) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a sortByAvailableMemory) Less(i, j int) bool {
 	// more available memory = lower index
-	return a[i].AvailableMemory > a[j].AvailableMemory
+	if a[i].AvailableMemory != a[j].AvailableMemory {
+		return a[i].AvailableMemory > a[j].AvailableMemory
+	}
+
+	return a[i].Name < a[j].Name
 }
 
 func (a sortByAvailableMemory) String() string {

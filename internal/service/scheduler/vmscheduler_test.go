@@ -50,7 +50,7 @@ func miBytes(in int32) uint64 {
 func TestSelectNode(t *testing.T) {
 	allowedNodes := []string{"pve1", "pve2", "pve3"}
 	var locations []infrav1.NodeLocation
-	var requestMiB = int32(8)
+	requestMiB := int32(8)
 	availableMem := map[string]uint64{
 		"pve1": miBytes(20),
 		"pve2": miBytes(30),
@@ -111,7 +111,7 @@ func TestSelectNodeEvenlySpread(t *testing.T) {
 	// Verify that VMs are scheduled evenly across nodes when memory allows
 	allowedNodes := []string{"pve1", "pve2", "pve3"}
 	var locations []infrav1.NodeLocation
-	var requestMiB = int32(8)
+	requestMiB := int32(8)
 	availableMem := map[string]uint64{
 		"pve1": miBytes(25), // enough for 3 VMs
 		"pve2": miBytes(35), // enough for 4 VMs
@@ -266,4 +266,95 @@ func setupClient() client.Client {
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	return fakeClient
+}
+
+func TestSelectNodePrecedence(t *testing.T) {
+	requestMiB := int32(8)
+
+	tests := []struct {
+		name         string
+		allowedNodes []string
+		availableMem map[string]uint64
+		locations    []infrav1.NodeLocation
+		expect       string
+	}{
+		{
+			name:         "fewest replicas wins over most memory",
+			allowedNodes: []string{"pve1", "pve2"},
+			availableMem: map[string]uint64{"pve1": miBytes(100), "pve2": miBytes(20)},
+			locations:    []infrav1.NodeLocation{{Node: "pve1"}},
+			expect:       "pve2",
+		},
+		{
+			name:         "least loaded node that does not fit is skipped",
+			allowedNodes: []string{"pve1", "pve2"},
+			availableMem: map[string]uint64{"pve1": miBytes(100), "pve2": miBytes(5)},
+			locations:    []infrav1.NodeLocation{{Node: "pve1"}},
+			expect:       "pve1",
+		},
+		{
+			name:         "exactly fitting node is accepted",
+			allowedNodes: []string{"pve1", "pve2"},
+			availableMem: map[string]uint64{"pve1": miBytes(8), "pve2": miBytes(30)},
+			locations: []infrav1.NodeLocation{
+				{Node: "pve2"}, {Node: "pve2"},
+			},
+			expect: "pve1",
+		},
+		{
+			name:         "equal replicas break on available memory",
+			allowedNodes: []string{"pve1", "pve2", "pve3"},
+			availableMem: map[string]uint64{"pve1": miBytes(20), "pve2": miBytes(30), "pve3": miBytes(25)},
+			expect:       "pve2",
+		},
+		{
+			name:         "fully tied nodes break on name",
+			allowedNodes: []string{"pve3", "pve1", "pve2"},
+			availableMem: map[string]uint64{"pve1": miBytes(30), "pve2": miBytes(30), "pve3": miBytes(30)},
+			expect:       "pve1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			machine := &infrav1.ProxmoxMachine{
+				Spec: infrav1.ProxmoxMachineSpec{MemoryMiB: &requestMiB},
+			}
+
+			node, err := selectNode(context.Background(), fakeResourceClient(tt.availableMem), machine,
+				tt.locations, tt.allowedNodes, &infrav1.SchedulerHints{})
+			require.NoError(t, err)
+			require.Equal(t, tt.expect, node)
+		})
+	}
+}
+
+func TestSelectNodeDeterministic(t *testing.T) {
+	requestMiB := int32(8)
+	availableMem := map[string]uint64{"pve1": miBytes(30), "pve2": miBytes(30), "pve3": miBytes(30)}
+	locations := []infrav1.NodeLocation{{Node: "pve1"}, {Node: "pve2"}, {Node: "pve3"}}
+
+	permutations := [][]string{
+		{"pve1", "pve2", "pve3"},
+		{"pve1", "pve3", "pve2"},
+		{"pve2", "pve1", "pve3"},
+		{"pve2", "pve3", "pve1"},
+		{"pve3", "pve1", "pve2"},
+		{"pve3", "pve2", "pve1"},
+	}
+
+	for _, allowedNodes := range permutations {
+		t.Run(fmt.Sprintf("%v", allowedNodes), func(t *testing.T) {
+			machine := &infrav1.ProxmoxMachine{
+				Spec: infrav1.ProxmoxMachineSpec{MemoryMiB: &requestMiB},
+			}
+
+			for range 10 {
+				node, err := selectNode(context.Background(), fakeResourceClient(availableMem), machine,
+					locations, allowedNodes, &infrav1.SchedulerHints{})
+				require.NoError(t, err)
+				require.Equal(t, "pve1", node, "placement must not depend on the order of allowedNodes")
+			}
+		})
+	}
 }
