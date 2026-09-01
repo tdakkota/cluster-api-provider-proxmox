@@ -41,6 +41,8 @@ func (src *ProxmoxMachine) ConvertTo(dstRaw conversion.Hub) error {
 
 	restoreProxmoxMachineSpec(&src.Spec, &dst.Spec, &restored.Spec, ok)
 
+	dst.Status.FailureDomain = restored.Status.FailureDomain
+
 	clusterv1.Convert_bool_To_Pointer_bool(src.Status.Ready, ok,
 		restored.Status.Initialization.Provisioned,
 		&dst.Status.Initialization.Provisioned)
@@ -92,6 +94,8 @@ func restoreProxmoxMachineSpec(src *ProxmoxMachineSpec, dst *v1alpha2.ProxmoxMac
 	if src.Target != nil {
 		dst.AllowedNodes = []string{*src.Target}
 	}
+
+	dst.FailureDomain = restored.FailureDomain
 
 	// restore fields that don't exist in v1alpha1
 	if dst.Network != nil && restored.Network != nil {

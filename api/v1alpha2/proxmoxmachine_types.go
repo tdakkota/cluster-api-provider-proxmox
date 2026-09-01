@@ -132,6 +132,10 @@ type ProxmoxMachineSpec struct {
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
 
+	// failureDomain is the failure domain this machine is placed in.
+	// +optional
+	FailureDomain string `json:"failureDomain,omitempty"`
+
 	// tags is a list of tags to be applied to the virtual machine.
 	// +optional
 	// +immutable
@@ -289,6 +293,9 @@ type TemplateSelector struct {
 // NetworkSpec defines the virtual machine's network configuration.
 type NetworkSpec struct {
 	// zone is the cluster deployment zone this machine will refer to.
+	//
+	// Deprecated: use ProxmoxMachineSpec.FailureDomain instead. It is only
+	// consulted when failureDomain is empty.
 	// +optional
 	Zone Zone `json:"zone,omitempty"`
 
@@ -540,6 +547,10 @@ type ProxmoxMachineStatus struct {
 	// retryAfter tracks the time we can retry queueing a task.
 	// +optional
 	RetryAfter *metav1.Time `json:"retryAfter,omitempty"`
+
+	// failureDomain is the failure domain the VM was actually placed in.
+	// +optional
+	FailureDomain string `json:"failureDomain,omitempty"`
 }
 
 // ProxmoxMachineInitializationStatus provides observations of the ProxmoxMachine initialization process.

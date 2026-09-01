@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -87,6 +88,13 @@ type ProxmoxClusterSpec struct {
 	// +optional
 	ZoneConfigs []ZoneConfigSpec `json:"zoneConfig,omitempty"`
 
+	// failureDomains defines the failure domains machines may be placed in.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=32
+	FailureDomains []ProxmoxFailureDomain `json:"failureDomains,omitempty"`
+
 	// credentialsRef is a reference to a Secret that contains the credentials to use for provisioning this cluster. If not
 	// supplied then the credentials of the controller will be used.
 	// if no namespace is provided, the namespace of the ProxmoxCluster will be used.
@@ -148,6 +156,59 @@ type ZoneConfigSpec struct {
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
 	DNSServers []string `json:"dnsServers,omitempty"`
+}
+
+// ProxmoxFailureDomain is a set of Proxmox nodes machines may be placed on,
+// sharing a network zone.
+type ProxmoxFailureDomain struct {
+	// name uniquely identifies the failure domain within the cluster.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Name string `json:"name,omitempty"`
+
+	// nodes are the Proxmox nodes machines in this domain may be cloned onto.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	Nodes []string `json:"nodes,omitempty"`
+
+	// zone names the zoneConfig entry supplying addresses and DNS for this
+	// domain. Defaults to name.
+	// +optional
+	Zone string `json:"zone,omitempty"`
+
+	// controlPlane declares whether control plane machines may be placed here.
+	// +optional
+	// +kubebuilder:default=true
+	ControlPlane *bool `json:"controlPlane,omitempty"`
+}
+
+// HasZone reports whether the cluster configures the named deployment zone. The
+// implicit "default" zone has no zoneConfig entry of its own; it is the
+// cluster-level ip config.
+func (s *ProxmoxClusterSpec) HasZone(zone string) bool {
+	if zone == "default" {
+		return s.IPv4Config != nil || s.IPv6Config != nil
+	}
+
+	return slices.ContainsFunc(s.ZoneConfigs, func(z ZoneConfigSpec) bool {
+		return ptr.Deref(z.Zone, "") == zone
+	})
+}
+
+// ZoneName returns the zoneConfig entry this failure domain draws addresses from.
+func (fd *ProxmoxFailureDomain) ZoneName() string {
+	if fd.Zone != "" {
+		return fd.Zone
+	}
+
+	return fd.Name
+}
+
+// IsControlPlaneAllowed reports whether control plane machines may be placed in this domain.
+func (fd *ProxmoxFailureDomain) IsControlPlaneAllowed() bool {
+	return ptr.Deref(fd.ControlPlane, true)
 }
 
 // IPConfigSpec contains information about available IP config.
@@ -232,6 +293,13 @@ type ProxmoxClusterStatus struct {
 	// for different machines.
 	// +optional
 	NodeLocations *NodeLocations `json:"nodeLocations,omitempty"`
+
+	// failureDomains is the list of failure domains this cluster publishes to CAPI.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=32
+	FailureDomains []clusterv1.FailureDomain `json:"failureDomains,omitempty"`
 }
 
 // ProxmoxClusterInitializationStatus provides observations of the ProxmoxCluster initialization process.
@@ -383,6 +451,54 @@ func (c *ProxmoxCluster) AddInClusterZoneRef(pool client.Object) {
 	} else if poolType == IPv6Type {
 		c.Status.InClusterZoneRef[index].InClusterIPPoolRefV6 = &poolRef
 	}
+}
+
+// GetFailureDomain returns the failure domain declared under the given name,
+// or nil when the cluster declares none.
+func (c *ProxmoxCluster) GetFailureDomain(name string) *ProxmoxFailureDomain {
+	if name == "" {
+		return nil
+	}
+
+	index := slices.IndexFunc(c.Spec.FailureDomains, func(fd ProxmoxFailureDomain) bool {
+		return fd.Name == name
+	})
+	if index < 0 {
+		return nil
+	}
+
+	return &c.Spec.FailureDomains[index]
+}
+
+// ZoneForMachine returns the deployment zone a machine draws addresses from:
+// the zone of its failure domain when it has one, otherwise the deprecated
+// spec.network.zone, and finally the implicit "default" zone.
+func (c *ProxmoxCluster) ZoneForMachine(machine *ProxmoxMachine) string {
+	if fd := c.GetFailureDomain(machine.Spec.FailureDomain); fd != nil {
+		return fd.ZoneName()
+	}
+
+	if machine.Spec.Network != nil {
+		return ptr.Deref(machine.Spec.Network.Zone, "default")
+	}
+
+	return "default"
+}
+
+// FailureDomainForNode returns the name of the failure domain listing the given
+// Proxmox node, or an empty string when no declared domain covers it.
+func (c *ProxmoxCluster) FailureDomainForNode(node string) string {
+	if node == "" {
+		return ""
+	}
+
+	for i := range c.Spec.FailureDomains {
+		if slices.Contains(c.Spec.FailureDomains[i].Nodes, node) {
+			return c.Spec.FailureDomains[i].Name
+		}
+	}
+
+	return ""
 }
 
 // SetInClusterIPPoolRef will set the reference to the provided InClusterIPPool.
