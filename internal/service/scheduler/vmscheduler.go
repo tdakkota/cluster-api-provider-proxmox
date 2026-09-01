@@ -48,20 +48,34 @@ func (err InsufficientMemoryError) Error() string {
 // It requires the machine's ProxmoxCluster to have at least 1 allowed node.
 func ScheduleVM(ctx context.Context, machineScope *scope.MachineScope) (string, error) {
 	client := machineScope.InfraCluster.ProxmoxClient
-	// Use the default allowed nodes from the ProxmoxCluster.
-	allowedNodes := machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes
+	allowedNodes := AllowedNodes(machineScope)
 	schedulerHints := machineScope.InfraCluster.ProxmoxCluster.Spec.SchedulerHints
 	locations := machineScope.InfraCluster.ProxmoxCluster.Status.NodeLocations.Workers
 	if util.IsControlPlaneMachine(machineScope.Machine) {
 		locations = machineScope.InfraCluster.ProxmoxCluster.Status.NodeLocations.ControlPlane
 	}
 
-	// If ProxmoxMachine defines allowedNodes use them instead
-	if len(machineScope.ProxmoxMachine.Spec.AllowedNodes) > 0 {
-		allowedNodes = machineScope.ProxmoxMachine.Spec.AllowedNodes
+	return selectNode(ctx, client, machineScope.ProxmoxMachine, locations, allowedNodes, schedulerHints)
+}
+
+// AllowedNodes returns the Proxmox nodes the machine may be placed on.
+//
+// The three layers replace one another rather than intersect: the failure
+// domain's nodes win over the ProxmoxMachine's allowedNodes, which win over the
+// ProxmoxCluster's. Machine-over-cluster already worked that way, and mixing in
+// intersection would leave an empty result impossible to attribute to a layer.
+func AllowedNodes(machineScope *scope.MachineScope) []string {
+	proxmoxCluster := machineScope.InfraCluster.ProxmoxCluster
+
+	if fd := proxmoxCluster.GetFailureDomain(machineScope.FailureDomain()); fd != nil {
+		return fd.Nodes
 	}
 
-	return selectNode(ctx, client, machineScope.ProxmoxMachine, locations, allowedNodes, schedulerHints)
+	if len(machineScope.ProxmoxMachine.Spec.AllowedNodes) > 0 {
+		return machineScope.ProxmoxMachine.Spec.AllowedNodes
+	}
+
+	return proxmoxCluster.Spec.AllowedNodes
 }
 
 func selectNode(

@@ -213,6 +213,12 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		}
 	}
 
+	// Persist the failure domain Cluster API assigned, so the zone it maps to
+	// survives into IPAM and later reconciles.
+	if domain := machineScope.Machine.Spec.FailureDomain; domain != "" {
+		machineScope.ProxmoxMachine.Spec.FailureDomain = domain
+	}
+
 	// find the vm
 	// Get or create the VM.
 	vm, err := vmservice.ReconcileVM(ctx, machineScope)
@@ -238,7 +244,7 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	// Set proxmox deployment zone for label selectors.
 	labels := machineScope.ProxmoxMachine.GetLabels()
 	labels[infrav1.ProxmoxZoneLabel] =
-		ptr.Deref(machineScope.ProxmoxMachine.Spec.Network.Zone, "default")
+		clusterScope.ProxmoxCluster.ZoneForMachine(machineScope.ProxmoxMachine)
 	machineScope.ProxmoxMachine.SetLabels(labels)
 
 	machineScope.SetReady()

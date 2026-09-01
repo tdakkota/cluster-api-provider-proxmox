@@ -116,6 +116,17 @@ func (m *MachineScope) Namespace() string {
 	return m.ProxmoxMachine.Namespace
 }
 
+// FailureDomain returns the failure domain the machine belongs to: the one
+// Cluster API assigned, or, when it assigned none, the one set directly on the
+// ProxmoxMachine.
+func (m *MachineScope) FailureDomain() string {
+	if domain := m.Machine.Spec.FailureDomain; domain != "" {
+		return domain
+	}
+
+	return m.ProxmoxMachine.Spec.FailureDomain
+}
+
 // IsControlPlane returns true if the machine is a control plane.
 func (m *MachineScope) IsControlPlane() bool {
 	return util.IsControlPlaneMachine(m.Machine)

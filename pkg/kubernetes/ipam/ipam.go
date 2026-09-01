@@ -179,7 +179,7 @@ func (h *Helper) GetInClusterPools(ctx context.Context, moxm *infrav1.ProxmoxMac
 
 	namespace := moxm.ObjectMeta.Namespace
 
-	zone := new(ptr.Deref(moxm.Spec.Network.Zone, "default"))
+	zone := new(h.cluster.ZoneForMachine(moxm))
 	zoneIndex := slices.IndexFunc(h.cluster.Status.InClusterZoneRef, func(z infrav1.InClusterZoneRef) bool {
 		return ptr.Equal(zone, z.Zone)
 	})
