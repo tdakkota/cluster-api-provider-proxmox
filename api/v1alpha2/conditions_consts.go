@@ -43,6 +43,19 @@ const (
 
 	// ProxmoxClusterProxmoxAvailableDeletingReason documents a ProxmoxCluster being deleted.
 	ProxmoxClusterProxmoxAvailableDeletingReason = "Deleting"
+
+	// ProxmoxClusterFailureDomainsPublishedCondition documents whether every failure
+	// domain declared in the spec was published to Cluster API.
+	ProxmoxClusterFailureDomainsPublishedCondition = "FailureDomainsPublished"
+
+	// ProxmoxClusterFailureDomainsPublishedReason documents that every declared
+	// failure domain was published.
+	ProxmoxClusterFailureDomainsPublishedReason = "Published"
+
+	// ProxmoxClusterFailureDomainsPublishedInvalidZoneReason documents a failure
+	// domain naming a zone the cluster does not configure. Such a domain is left
+	// out of the published list, so Cluster API never places machines in it.
+	ProxmoxClusterFailureDomainsPublishedInvalidZoneReason = "InvalidZone"
 )
 
 // Conditions and Reasons for ProxmoxMachine.
