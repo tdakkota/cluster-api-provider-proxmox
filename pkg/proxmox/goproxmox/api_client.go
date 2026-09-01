@@ -145,29 +145,81 @@ func (c *APIClient) FindVMResource(ctx context.Context, vmID uint64) (*proxmox.C
 	return nil, fmt.Errorf("unable to find VM with ID %d on any of the nodes", vmID)
 }
 
+// normalizeTemplateTags lowercases, sorts and dedupes tags, returning a new
+// slice. Proxmox VM tags are always lowercase, and lowercasing can collide, so
+// the duplicates have to go before they are counted or joined. It copies rather
+// than sorting in place because callers keep using the slice they passed.
+func normalizeTemplateTags(tags []string) []string {
+	out := make([]string, len(tags))
+	for i, tag := range tags {
+		out[i] = strings.ToLower(tag)
+	}
+
+	slices.Sort(out)
+
+	return slices.Compact(out)
+}
+
 // FindVMTemplateByTags tries to find a VMID by its tags across the whole cluster.
+//
+// It requires the tags to identify exactly one template. Clusters whose nodes
+// each keep their own copy of a template legitimately match more than once --
+// see [APIClient.FindVMTemplatesByTags], which returns every copy so the caller
+// can pick the one co-located with the node it intends to clone onto.
 func (c *APIClient) FindVMTemplateByTags(ctx context.Context, templateTags []string, matchPolicy string) (string, int32, error) {
+	templates, err := c.FindVMTemplatesByTags(ctx, templateTags, matchPolicy)
+	if err != nil {
+		return "", -1, err
+	}
+
+	// Normalised, so the message names the tags actually matched on rather than
+	// whatever spelling and ordering the caller passed.
+	templateTags = normalizeTemplateTags(templateTags)
+
+	matches := 0
+	for _, vmIDs := range templates {
+		matches += len(vmIDs)
+	}
+
+	if matches != 1 {
+		return "", -1, fmt.Errorf("%w: found %d VM templates with tags %q", ErrTemplateNotFound, matches, strings.Join(templateTags, ";"))
+	}
+
+	for node, vmIDs := range templates {
+		return node, vmIDs[0], nil
+	}
+
+	return "", -1, fmt.Errorf("%w: found 0 VM templates with tags %q", ErrTemplateNotFound, strings.Join(templateTags, ";"))
+}
+
+// FindVMTemplatesByTags finds every VM template matching templateTags, keyed by
+// the node that holds it.
+//
+// Without shared storage a template cannot be cloned across nodes, so a cluster
+// keeps one identically tagged copy per node and the tags match once per node
+// by design. Returning all of them lets the caller schedule onto a node that
+// actually holds a copy, instead of resolving the template cluster-wide and
+// then failing the clone with "VM uses local storage".
+//
+// Each node's VMIDs are sorted, so a node holding several matching templates
+// resolves the same way on every reconcile rather than following the order the
+// API happens to list them in.
+func (c *APIClient) FindVMTemplatesByTags(ctx context.Context, templateTags []string, matchPolicy string) (map[string][]int32, error) {
 	logger := log.FromContext(ctx)
 
 	cluster, err := c.Cluster(ctx)
 	if err != nil {
-		return "", -1, fmt.Errorf("cannot get cluster status: %w", err)
+		return nil, fmt.Errorf("cannot get cluster status: %w", err)
 	}
 	vmResources, err := cluster.Resources(ctx, "vm")
 	if err != nil {
-		return "", -1, fmt.Errorf("could not list vm resources: %w", err)
+		return nil, fmt.Errorf("could not list vm resources: %w", err)
 	}
 
-	for i, tag := range templateTags {
-		// Proxmox VM tags are always lowercase
-		templateTags[i] = strings.ToLower(tag)
-	}
-	// compact templateTags because of collisions after lowercasing
-	slices.Sort(templateTags)
-	templateTags = slices.Compact(templateTags)
+	templateTags = normalizeTemplateTags(templateTags)
 
-	var vmTemplate *proxmox.ClusterResource
-	matches, bestDistance := 0, int(^uint(0)>>1)
+	templates := make(map[string][]int32)
+	bestDistance := int(^uint(0) >> 1)
 NEXT_VM:
 	for _, vm := range vmResources {
 		if vm.Template == 0 || len(vm.Tags) == 0 {
@@ -198,18 +250,26 @@ NEXT_VM:
 			if distance > bestDistance {
 				continue NEXT_VM
 			}
-			bestDistance = distance
+			// A strictly better match invalidates everything collected so far,
+			// including copies already found on other nodes.
+			if distance < bestDistance {
+				bestDistance = distance
+				clear(templates)
+			}
 		}
 
-		matches++
-		vmTemplate = vm
+		templates[vm.Node] = append(templates[vm.Node], int32(vm.VMID))
 	}
 
-	if matches != 1 {
-		return "", -1, fmt.Errorf("%w: found %d VM templates with tags %q", ErrTemplateNotFound, matches, strings.Join(templateTags, ";"))
+	if len(templates) == 0 {
+		return nil, fmt.Errorf("%w: found 0 VM templates with tags %q", ErrTemplateNotFound, strings.Join(templateTags, ";"))
 	}
 
-	return vmTemplate.Node, int32(vmTemplate.VMID), nil
+	for node := range templates {
+		slices.Sort(templates[node])
+	}
+
+	return templates, nil
 }
 
 // DeleteVM deletes a VM based on the nodeName and vmID.

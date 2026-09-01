@@ -20,6 +20,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -47,6 +48,19 @@ func (err InsufficientMemoryError) Error() string {
 // ScheduleVM decides which node to a ProxmoxMachine should be scheduled on.
 // It requires the machine's ProxmoxCluster to have at least 1 allowed node.
 func ScheduleVM(ctx context.Context, machineScope *scope.MachineScope) (string, error) {
+	return ScheduleVMOnNodes(ctx, machineScope, nil)
+}
+
+// ScheduleVMOnNodes decides which node a ProxmoxMachine should be scheduled on,
+// restricted to candidates.
+//
+// Candidates are the nodes holding a copy of the template being cloned. Without
+// shared storage a clone cannot cross nodes, so scheduling onto a node with no
+// copy produces "VM uses local storage" from Proxmox at clone time -- after the
+// machine has been accepted. Passing them here keeps the destination and the
+// clone source on the same node. A nil or empty candidates list schedules over
+// the allowed nodes unrestricted, which is what pinning by templateID does.
+func ScheduleVMOnNodes(ctx context.Context, machineScope *scope.MachineScope, candidates []string) (string, error) {
 	client := machineScope.InfraCluster.ProxmoxClient
 	// Use the default allowed nodes from the ProxmoxCluster.
 	allowedNodes := machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes
@@ -61,7 +75,37 @@ func ScheduleVM(ctx context.Context, machineScope *scope.MachineScope) (string, 
 		allowedNodes = machineScope.ProxmoxMachine.Spec.AllowedNodes
 	}
 
+	if len(candidates) > 0 {
+		allowedNodes = intersectNodes(allowedNodes, candidates)
+		if len(allowedNodes) == 0 {
+			return "", ErrNoTemplateOnAllowedNodes
+		}
+	}
+
 	return selectNode(ctx, client, machineScope.ProxmoxMachine, locations, allowedNodes, schedulerHints)
+}
+
+// ErrNoTemplateOnAllowedNodes is returned when no allowed node holds a copy of
+// the template, so no placement can satisfy both the allowedNodes constraint
+// and the requirement that a clone stays on one node.
+var ErrNoTemplateOnAllowedNodes = errors.New("no allowed node holds a matching VM template")
+
+// intersectNodes returns the members of allowed that also appear in candidates,
+// preserving the order of allowed so scheduling stays deterministic.
+func intersectNodes(allowed, candidates []string) []string {
+	keep := make(map[string]struct{}, len(candidates))
+	for _, node := range candidates {
+		keep[node] = struct{}{}
+	}
+
+	out := make([]string, 0, len(allowed))
+	for _, node := range allowed {
+		if _, ok := keep[node]; ok {
+			out = append(out, node)
+		}
+	}
+
+	return out
 }
 
 func selectNode(
