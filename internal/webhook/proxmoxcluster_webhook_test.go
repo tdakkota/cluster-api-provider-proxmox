@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
@@ -93,6 +94,43 @@ var _ = Describe("Controller Test", func() {
 				Gateway:   "2001:db8::1",
 			}
 			g.Expect(k8sClient.Create(testEnv.GetContext(), &cluster)).To(MatchError(ContainSubstring("provided addresses are not valid IP addresses, ranges or CIDRs")))
+		})
+
+		It("should disallow a failure domain naming an unknown zone", func() {
+			cluster := validProxmoxCluster("test-cluster-unknown-fd-zone")
+			cluster.Spec.FailureDomains = []infrav1.ProxmoxFailureDomain{
+				{Name: "rack-1", Nodes: []string{"pve1"}, Zone: "nowhere"},
+			}
+			g.Expect(k8sClient.Create(testEnv.GetContext(), &cluster)).To(MatchError(ContainSubstring("must name a zoneConfig entry")))
+		})
+
+		It("should disallow a failure domain whose name is an unknown zone", func() {
+			cluster := validProxmoxCluster("test-cluster-unknown-fd-name")
+			cluster.Spec.FailureDomains = []infrav1.ProxmoxFailureDomain{
+				{Name: "rack-1", Nodes: []string{"pve1"}},
+			}
+			g.Expect(k8sClient.Create(testEnv.GetContext(), &cluster)).To(MatchError(ContainSubstring("must name a zoneConfig entry")))
+		})
+
+		It("should allow a failure domain on a configured zone", func() {
+			cluster := validProxmoxCluster("succeed-test-cluster-with-fd")
+			cluster.Spec.ZoneConfigs = []infrav1.ZoneConfigSpec{{
+				Zone:       ptr.To("dmz"),
+				IPv4Config: &infrav1.IPConfigSpec{Addresses: []string{"10.10.20.2-10.10.20.10"}, Gateway: "10.10.20.1", Prefix: 24},
+				DNSServers: []string{"8.8.8.8"},
+			}}
+			cluster.Spec.FailureDomains = []infrav1.ProxmoxFailureDomain{
+				{Name: "rack-1", Nodes: []string{"pve1"}, Zone: "dmz"},
+			}
+			g.Expect(k8sClient.Create(testEnv.GetContext(), &cluster)).To(Succeed())
+		})
+
+		It("should allow a failure domain on the implicit default zone", func() {
+			cluster := validProxmoxCluster("succeed-test-cluster-with-default-fd")
+			cluster.Spec.FailureDomains = []infrav1.ProxmoxFailureDomain{
+				{Name: "default", Nodes: []string{"pve1"}},
+			}
+			g.Expect(k8sClient.Create(testEnv.GetContext(), &cluster)).To(Succeed())
 		})
 
 		It("should disallow endpoint IP to intersect with node IPs", func() {
