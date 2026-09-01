@@ -289,7 +289,15 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode_InsufficientMemory(t *testing.
 
 	require.False(t, machineScope.InfraCluster.ProxmoxCluster.HasMachine(machineScope.Name(), false))
 	requireConditionIsFalse(t, machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
-	require.True(t, machineScope.HasFailed())
+
+	// A full cluster is not a property of this machine. Latching it here would
+	// stop reconcileNormal forever, and no amount of freed memory would bring
+	// the machine back.
+	require.False(t, machineScope.HasFailed())
+	require.Equal(t,
+		infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason,
+		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition),
+	)
 }
 
 func TestEnsureVirtualMachine_CreateVM_VMIDRange(t *testing.T) {
@@ -910,4 +918,27 @@ func TestReconcileVM_StateMachine(t *testing.T) {
 	require.Equal(t, machineScope.ProxmoxMachine.GetName(), machineScope.ProxmoxMachine.Status.Addresses[0].Address)
 	require.Equal(t, "192.0.2.10", machineScope.ProxmoxMachine.Status.Addresses[1].Address)
 	require.Equal(t, "2001:db8::2", machineScope.ProxmoxMachine.Status.Addresses[2].Address)
+}
+
+func TestEnsureVirtualMachine_CreateVM_InsufficientMemory_IsNotTerminal(t *testing.T) {
+	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
+	machineScope.ProxmoxMachine.Spec.AllowedNodes = []string{"node2"}
+	machineScope.ProxmoxMachine.Spec.MemoryMiB = ptr.To(int32(4096))
+
+	// Every allowed node is short of memory, which is a property of the cluster
+	// right now and not of this machine.
+	proxmoxClient.EXPECT().
+		GetReservableMemoryBytes(context.Background(), "node2", int64(100)).
+		Return(uint64(0), nil).
+		Once()
+
+	_, err := createVM(context.Background(), machineScope)
+	require.Error(t, err)
+	require.ErrorAs(t, err, &scheduler.InsufficientMemoryError{})
+
+	require.Equal(t,
+		infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason,
+		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition),
+	)
+	require.False(t, machineScope.HasFailed(), "a full cluster must not latch the machine as failed")
 }

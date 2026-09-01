@@ -99,6 +99,16 @@ const (
 	// documents a ProxmoxMachine assigning host addresses for Cluster API.
 	ProxmoxMachineVirtualMachineProvisionedWaitingForClusterAPIMachineAddressesReason = "WaitingForClusterAPIMachineAddresses"
 
+	// ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason documents a
+	// ProxmoxMachine that no allowed Proxmox node can host right now: the nodes are
+	// short of memory, or none of them holds a copy of the template.
+	//
+	// This is transient. Freeing memory, copying the template or widening
+	// allowedNodes lets a later reconcile place the machine, so it deliberately
+	// does not use VMProvisionFailed, which MachineScope.HasFailed treats as
+	// terminal and never retries.
+	ProxmoxMachineVirtualMachineProvisionedWaitingForPlacementReason = "WaitingForPlacement"
+
 	// ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason documents a failure
 	// during virtual machine provisioning.
 	ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason = "VMProvisionFailed"
