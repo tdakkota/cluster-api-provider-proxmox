@@ -213,6 +213,8 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		}
 	}
 
+	machineScope.SyncFailureDomain()
+
 	// find the vm
 	// Get or create the VM.
 	vm, err := vmservice.ReconcileVM(ctx, machineScope)
@@ -238,7 +240,7 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
 	// Set proxmox deployment zone for label selectors.
 	labels := machineScope.ProxmoxMachine.GetLabels()
 	labels[infrav1.ProxmoxZoneLabel] =
-		ptr.Deref(machineScope.ProxmoxMachine.Spec.Network.Zone, "default")
+		clusterScope.ProxmoxCluster.ZoneForMachine(machineScope.ProxmoxMachine)
 	machineScope.ProxmoxMachine.SetLabels(labels)
 
 	machineScope.SetReady()

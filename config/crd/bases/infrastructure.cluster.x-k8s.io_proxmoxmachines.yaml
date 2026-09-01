@@ -978,6 +978,10 @@ spec:
                     - message: Value is immutable
                       rule: self == oldSelf
                 type: object
+              failureDomain:
+                description: failureDomain is the failure domain this machine is placed
+                  in.
+                type: string
               format:
                 description: format for file storage. Only valid for full clone.
                 enum:
@@ -1313,8 +1317,11 @@ spec:
                     - name
                     x-kubernetes-list-type: map
                   zone:
-                    description: zone is the cluster deployment zone this machine
-                      will refer to.
+                    description: |-
+                      zone is the cluster deployment zone this machine will refer to.
+
+                      Deprecated: use ProxmoxMachineSpec.FailureDomain instead. It is only
+                      consulted when failureDomain is empty.
                     pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
                     type: string
                 required:
@@ -1554,6 +1561,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              failureDomain:
+                description: failureDomain is the failure domain the VM was actually
+                  placed in.
+                type: string
               initialization:
                 description: |-
                   initialization provides observations of the ProxmoxMachine initialization process.

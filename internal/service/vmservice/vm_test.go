@@ -275,6 +275,74 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode_MachineAllowedNodes(t *testing
 	requireConditionIsFalse(t, machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
 }
 
+func TestEnsureVirtualMachine_CreateVM_FailureDomain(t *testing.T) {
+	tests := []struct {
+		name       string
+		domains    []infrav1.ProxmoxFailureDomain
+		domain     string
+		node       string
+		wantTarget string
+		wantDomain string
+	}{
+		{
+			name: "reports the domain owning the chosen node",
+			domains: []infrav1.ProxmoxFailureDomain{
+				{Name: "rack-1", Nodes: []string{"node1", "node2"}},
+				{Name: "rack-2", Nodes: []string{"node3"}},
+			},
+			domain:     "rack-2",
+			node:       "node3",
+			wantTarget: "node3",
+			wantDomain: "rack-2",
+		},
+		{
+			name: "reports where the vm landed, not what was asked for",
+			domains: []infrav1.ProxmoxFailureDomain{
+				{Name: "rack-1", Nodes: []string{"node1", "node2"}},
+				{Name: "rack-2", Nodes: []string{"node3"}},
+			},
+			domain:     "rack-1",
+			node:       "node3",
+			wantTarget: "node3",
+			wantDomain: "rack-2",
+		},
+		{
+			name: "stays empty when the node is in no domain",
+			domains: []infrav1.ProxmoxFailureDomain{
+				{Name: "rack-1", Nodes: []string{"node1"}},
+			},
+			node:       "node2",
+			wantTarget: "node2",
+			wantDomain: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
+			machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes = []string{"node1", "node2", "node3"}
+			machineScope.InfraCluster.ProxmoxCluster.Spec.FailureDomains = test.domains
+			machineScope.Machine.Spec.FailureDomain = test.domain
+
+			selectNextNode = func(context.Context, *scope.MachineScope) (string, error) {
+				return test.node, nil
+			}
+			t.Cleanup(func() { selectNextNode = scheduler.ScheduleVM })
+
+			expectedOptions := proxmox.VMCloneRequest{Node: "node1", Name: "test", Target: test.wantTarget, Full: true}
+			response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
+			proxmoxClient.EXPECT().CloneVM(context.Background(), 123, expectedOptions).Return(response, nil).Once()
+
+			requeue, err := ensureVirtualMachine(context.Background(), machineScope)
+			require.NoError(t, err)
+			require.True(t, requeue)
+
+			require.Equal(t, test.wantTarget, *machineScope.ProxmoxMachine.Status.ProxmoxNode)
+			require.Equal(t, test.wantDomain, machineScope.ProxmoxMachine.Status.FailureDomain)
+		})
+	}
+}
+
 func TestEnsureVirtualMachine_CreateVM_SelectNode_InsufficientMemory(t *testing.T) {
 	machineScope, _, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
 	machineScope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes = []string{"node1"}

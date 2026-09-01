@@ -20,6 +20,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -229,6 +230,8 @@ func (r *ProxmoxClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 		return reconcile.Result{}, err
 	}
 
+	reconcileFailureDomains(clusterScope.ProxmoxCluster)
+
 	conditions.Set(clusterScope.ProxmoxCluster, metav1.Condition{
 		Type:   infrav1.ProxmoxClusterProxmoxAvailableCondition,
 		Status: metav1.ConditionTrue,
@@ -238,6 +241,58 @@ func (r *ProxmoxClusterReconciler) reconcileNormal(ctx context.Context, clusterS
 	clusterScope.SetReady()
 
 	return ctrl.Result{}, nil
+}
+
+// reconcileFailureDomains publishes the declared failure domains on
+// status.failureDomains, which is where core Cluster API reads them from.
+//
+// A domain whose zone names no zoneConfig entry is left out: publishing it would
+// have Cluster API place machines in a domain with no addresses to hand them.
+// Whether its Proxmox nodes exist is deliberately not checked here, because the
+// Proxmox client exposes no node listing.
+func reconcileFailureDomains(proxmoxCluster *infrav1.ProxmoxCluster) {
+	if len(proxmoxCluster.Spec.FailureDomains) == 0 {
+		proxmoxCluster.Status.FailureDomains = nil
+		conditions.Delete(proxmoxCluster, infrav1.ProxmoxClusterFailureDomainsPublishedCondition)
+
+		return
+	}
+
+	domains := make([]clusterv1.FailureDomain, 0, len(proxmoxCluster.Spec.FailureDomains))
+	var excluded []string
+
+	for i := range proxmoxCluster.Spec.FailureDomains {
+		fd := &proxmoxCluster.Spec.FailureDomains[i]
+		if !proxmoxCluster.Spec.HasZone(fd.ZoneName()) {
+			excluded = append(excluded, fmt.Sprintf("%s (zone %q is not configured)", fd.Name, fd.ZoneName()))
+
+			continue
+		}
+
+		domains = append(domains, clusterv1.FailureDomain{
+			Name:         fd.Name,
+			ControlPlane: fd.ControlPlane,
+		})
+	}
+
+	proxmoxCluster.Status.FailureDomains = domains
+
+	if len(excluded) > 0 {
+		conditions.Set(proxmoxCluster, metav1.Condition{
+			Type:    infrav1.ProxmoxClusterFailureDomainsPublishedCondition,
+			Status:  metav1.ConditionFalse,
+			Reason:  infrav1.ProxmoxClusterFailureDomainsPublishedInvalidZoneReason,
+			Message: "not published: " + strings.Join(excluded, ", "),
+		})
+
+		return
+	}
+
+	conditions.Set(proxmoxCluster, metav1.Condition{
+		Type:   infrav1.ProxmoxClusterFailureDomainsPublishedCondition,
+		Status: metav1.ConditionTrue,
+		Reason: infrav1.ProxmoxClusterFailureDomainsPublishedReason,
+	})
 }
 
 func (r *ProxmoxClusterReconciler) reconcileIPAM(ctx context.Context, clusterScope *scope.ClusterScope) (reconcile.Result, error) {

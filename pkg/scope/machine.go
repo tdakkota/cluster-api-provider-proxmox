@@ -116,6 +116,28 @@ func (m *MachineScope) Namespace() string {
 	return m.ProxmoxMachine.Namespace
 }
 
+// FailureDomain returns the failure domain the machine belongs to: the one
+// Cluster API assigned, or, when it assigned none, the one set directly on the
+// ProxmoxMachine.
+func (m *MachineScope) FailureDomain() string {
+	if domain := m.Machine.Spec.FailureDomain; domain != "" {
+		return domain
+	}
+
+	return m.ProxmoxMachine.Spec.FailureDomain
+}
+
+// SyncFailureDomain mirrors the failure domain Cluster API assigned onto the
+// ProxmoxMachine, so the zone it maps to survives into IPAM, which only ever
+// sees the ProxmoxMachine.
+//
+// Unconditional: mirroring only a non-empty assignment leaves a stale domain
+// behind when Cluster API clears one, and placement would go on constraining the
+// machine to a domain that no longer exists.
+func (m *MachineScope) SyncFailureDomain() {
+	m.ProxmoxMachine.Spec.FailureDomain = m.Machine.Spec.FailureDomain
+}
+
 // IsControlPlane returns true if the machine is a control plane.
 func (m *MachineScope) IsControlPlane() bool {
 	return util.IsControlPlaneMachine(m.Machine)

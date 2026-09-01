@@ -79,6 +79,11 @@ func (*ProxmoxCluster) ValidateCreate(_ context.Context, obj runtime.Object) (wa
 		return warnings, err
 	}
 
+	if err := validateFailureDomains(&cluster.Spec, cluster.GroupVersionKind().GroupKind(), cluster.GetName()); err != nil {
+		warnings = append(warnings, fmt.Sprintf("cannot create proxmox cluster %s", cluster.GetName()))
+		return warnings, err
+	}
+
 	return warnings, nil
 }
 
@@ -99,7 +104,57 @@ func (*ProxmoxCluster) ValidateUpdate(_ context.Context, _ runtime.Object, newOb
 		return warnings, err
 	}
 
+	if err := validateFailureDomains(&newCluster.Spec, newCluster.GroupVersionKind().GroupKind(), newCluster.GetName()); err != nil {
+		warnings = append(warnings, fmt.Sprintf("cannot update proxmox cluster %s", newCluster.GetName()))
+		return warnings, err
+	}
+
 	return warnings, nil
+}
+
+// validateFailureDomains rejects a failure domain whose zone names no zoneConfig
+// entry, since machines placed there would have no addresses to draw on, and one
+// claiming a node another domain already claims.
+//
+// This lives here rather than in a CEL rule: expressing it intra-object needs a
+// nested all()/exists() over two unbounded lists, and the apiserver rejects the
+// resulting CRD for exceeding its rule cost budget by more than 100x.
+func validateFailureDomains(spec *infrav1.ProxmoxClusterSpec, gk schema.GroupKind, name string) error {
+	var errs field.ErrorList
+
+	owner := make(map[string]string, len(spec.FailureDomains))
+
+	for i := range spec.FailureDomains {
+		fd := &spec.FailureDomains[i]
+		if !spec.HasZone(fd.ZoneName()) {
+			errs = append(errs, field.Invalid(
+				field.NewPath("spec", "failureDomains").Index(i).Child("zone"),
+				fd.ZoneName(),
+				"must name a zoneConfig entry"))
+		}
+
+		for j, node := range fd.Nodes {
+			// Domains partition the nodes. Two domains sharing a node are not
+			// independent - the node dying takes both down - so spreading across
+			// them would report a redundancy the cluster does not have.
+			if other, ok := owner[node]; ok {
+				errs = append(errs, field.Invalid(
+					field.NewPath("spec", "failureDomains").Index(i).Child("nodes").Index(j),
+					node,
+					fmt.Sprintf("already belongs to failure domain %q", other)))
+
+				continue
+			}
+
+			owner[node] = fd.Name
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return apierrors.NewInvalid(gk, name, errs)
 }
 
 func validateControlPlaneEndpoint(spec *infrav1.ProxmoxClusterSpec, gk schema.GroupKind, name string) error {

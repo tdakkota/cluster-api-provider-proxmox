@@ -474,7 +474,7 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
 		scope.InfraCluster.ProxmoxCluster.Status.NodeLocations = new(infrav1.NodeLocations)
 	}
 
-	if len(scope.InfraCluster.ProxmoxCluster.Spec.AllowedNodes) > 0 || len(scope.ProxmoxMachine.Spec.AllowedNodes) > 0 {
+	if len(scheduler.AllowedNodes(scope)) > 0 {
 		var err error
 		options.Target, err = selectNextNode(ctx, scope)
 		if err != nil {
@@ -520,6 +520,7 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
 	}
 
 	scope.ProxmoxMachine.Status.ProxmoxNode = new(node)
+	scope.ProxmoxMachine.Status.FailureDomain = scope.InfraCluster.ProxmoxCluster.FailureDomainForNode(node)
 
 	// if the creation was successful, we store the information about the node in the
 	// cluster status
