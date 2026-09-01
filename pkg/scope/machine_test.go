@@ -221,3 +221,28 @@ func TestMachineScope_GetBootstrapSecret(t *testing.T) {
 	require.NoErrorf(t, scope.GetBootstrapSecret(context.Background(), &bootstrapSecret), "")
 	require.Equal(t, secret.GetName(), bootstrapSecret.GetName())
 }
+
+func TestMachineScopeSyncFailureDomain(t *testing.T) {
+	tests := []struct {
+		name     string
+		assigned string
+		existing string
+		want     string
+	}{
+		{name: "assignment is mirrored", assigned: "rack-1", want: "rack-1"},
+		{name: "reassignment replaces", assigned: "rack-2", existing: "rack-1", want: "rack-2"},
+		{name: "cleared assignment clears the mirror", assigned: "", existing: "rack-1", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scope := &MachineScope{
+				Machine:        &clusterv1.Machine{Spec: clusterv1.MachineSpec{FailureDomain: tt.assigned}},
+				ProxmoxMachine: &infrav1.ProxmoxMachine{Spec: infrav1.ProxmoxMachineSpec{FailureDomain: tt.existing}},
+			}
+
+			scope.SyncFailureDomain()
+			require.Equal(t, tt.want, scope.ProxmoxMachine.Spec.FailureDomain)
+		})
+	}
+}

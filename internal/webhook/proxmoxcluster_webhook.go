@@ -113,13 +113,16 @@ func (*ProxmoxCluster) ValidateUpdate(_ context.Context, _ runtime.Object, newOb
 }
 
 // validateFailureDomains rejects a failure domain whose zone names no zoneConfig
-// entry, since machines placed there would have no addresses to draw on.
+// entry, since machines placed there would have no addresses to draw on, and one
+// claiming a node another domain already claims.
 //
 // This lives here rather than in a CEL rule: expressing it intra-object needs a
 // nested all()/exists() over two unbounded lists, and the apiserver rejects the
 // resulting CRD for exceeding its rule cost budget by more than 100x.
 func validateFailureDomains(spec *infrav1.ProxmoxClusterSpec, gk schema.GroupKind, name string) error {
 	var errs field.ErrorList
+
+	owner := make(map[string]string, len(spec.FailureDomains))
 
 	for i := range spec.FailureDomains {
 		fd := &spec.FailureDomains[i]
@@ -128,6 +131,22 @@ func validateFailureDomains(spec *infrav1.ProxmoxClusterSpec, gk schema.GroupKin
 				field.NewPath("spec", "failureDomains").Index(i).Child("zone"),
 				fd.ZoneName(),
 				"must name a zoneConfig entry"))
+		}
+
+		for j, node := range fd.Nodes {
+			// Domains partition the nodes. Two domains sharing a node are not
+			// independent - the node dying takes both down - so spreading across
+			// them would report a redundancy the cluster does not have.
+			if other, ok := owner[node]; ok {
+				errs = append(errs, field.Invalid(
+					field.NewPath("spec", "failureDomains").Index(i).Child("nodes").Index(j),
+					node,
+					fmt.Sprintf("already belongs to failure domain %q", other)))
+
+				continue
+			}
+
+			owner[node] = fd.Name
 		}
 	}
 

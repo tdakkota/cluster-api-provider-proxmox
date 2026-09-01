@@ -72,6 +72,14 @@ func (*ProxmoxClusterTemplate) ValidateCreate(_ context.Context, obj runtime.Obj
 		return warnings, err
 	}
 
+	// Templates are the only path a topology-managed cluster takes, so skipping
+	// this here would let a bad domain through admission and surface it much
+	// later, as a ProxmoxCluster the cluster's own webhook rejects.
+	if err := validateFailureDomains(&cluster.Spec.Template.Spec, cluster.GroupVersionKind().GroupKind(), cluster.GetName()); err != nil {
+		warnings = append(warnings, fmt.Sprintf("cannot create proxmox cluster template %s", cluster.GetName()))
+		return warnings, err
+	}
+
 	return warnings, nil
 }
 
@@ -88,6 +96,11 @@ func (*ProxmoxClusterTemplate) ValidateUpdate(_ context.Context, _ runtime.Objec
 	}
 
 	if err := validateControlPlaneEndpoint(&newCluster.Spec.Template.Spec, newCluster.GroupVersionKind().GroupKind(), newCluster.GetName()); err != nil {
+		warnings = append(warnings, fmt.Sprintf("cannot update proxmox cluster %s", newCluster.GetName()))
+		return warnings, err
+	}
+
+	if err := validateFailureDomains(&newCluster.Spec.Template.Spec, newCluster.GroupVersionKind().GroupKind(), newCluster.GetName()); err != nil {
 		warnings = append(warnings, fmt.Sprintf("cannot update proxmox cluster %s", newCluster.GetName()))
 		return warnings, err
 	}

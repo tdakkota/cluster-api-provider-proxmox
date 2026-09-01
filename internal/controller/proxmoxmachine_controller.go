@@ -213,11 +213,7 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
 		}
 	}
 
-	// Persist the failure domain Cluster API assigned, so the zone it maps to
-	// survives into IPAM and later reconciles.
-	if domain := machineScope.Machine.Spec.FailureDomain; domain != "" {
-		machineScope.ProxmoxMachine.Spec.FailureDomain = domain
-	}
+	machineScope.SyncFailureDomain()
 
 	// find the vm
 	// Get or create the VM.
