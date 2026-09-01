@@ -454,9 +454,9 @@ func (_c *MockClient_FindVMTemplateByTags_Call) RunAndReturn(run func(context.Co
 	return _c
 }
 
-// GetReservableMemoryBytes provides a mock function with given fields: ctx, nodeName, nodeMemoryAdjustment
-func (_m *MockClient) GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64) (uint64, error) {
-	ret := _m.Called(ctx, nodeName, nodeMemoryAdjustment)
+// GetReservableMemoryBytes provides a mock function with given fields: ctx, nodeName, nodeMemoryAdjustment, reserveStoppedGuests
+func (_m *MockClient) GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64, reserveStoppedGuests bool) (uint64, error) {
+	ret := _m.Called(ctx, nodeName, nodeMemoryAdjustment, reserveStoppedGuests)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetReservableMemoryBytes")
@@ -464,17 +464,17 @@ func (_m *MockClient) GetReservableMemoryBytes(ctx context.Context, nodeName str
 
 	var r0 uint64
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, int64) (uint64, error)); ok {
-		return rf(ctx, nodeName, nodeMemoryAdjustment)
+	if rf, ok := ret.Get(0).(func(context.Context, string, int64, bool) (uint64, error)); ok {
+		return rf(ctx, nodeName, nodeMemoryAdjustment, reserveStoppedGuests)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string, int64) uint64); ok {
-		r0 = rf(ctx, nodeName, nodeMemoryAdjustment)
+	if rf, ok := ret.Get(0).(func(context.Context, string, int64, bool) uint64); ok {
+		r0 = rf(ctx, nodeName, nodeMemoryAdjustment, reserveStoppedGuests)
 	} else {
 		r0 = ret.Get(0).(uint64)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string, int64) error); ok {
-		r1 = rf(ctx, nodeName, nodeMemoryAdjustment)
+	if rf, ok := ret.Get(1).(func(context.Context, string, int64, bool) error); ok {
+		r1 = rf(ctx, nodeName, nodeMemoryAdjustment, reserveStoppedGuests)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -491,13 +491,14 @@ type MockClient_GetReservableMemoryBytes_Call struct {
 //   - ctx context.Context
 //   - nodeName string
 //   - nodeMemoryAdjustment int64
-func (_e *MockClient_Expecter) GetReservableMemoryBytes(ctx interface{}, nodeName interface{}, nodeMemoryAdjustment interface{}) *MockClient_GetReservableMemoryBytes_Call {
-	return &MockClient_GetReservableMemoryBytes_Call{Call: _e.mock.On("GetReservableMemoryBytes", ctx, nodeName, nodeMemoryAdjustment)}
+//   - reserveStoppedGuests bool
+func (_e *MockClient_Expecter) GetReservableMemoryBytes(ctx interface{}, nodeName interface{}, nodeMemoryAdjustment interface{}, reserveStoppedGuests interface{}) *MockClient_GetReservableMemoryBytes_Call {
+	return &MockClient_GetReservableMemoryBytes_Call{Call: _e.mock.On("GetReservableMemoryBytes", ctx, nodeName, nodeMemoryAdjustment, reserveStoppedGuests)}
 }
 
-func (_c *MockClient_GetReservableMemoryBytes_Call) Run(run func(ctx context.Context, nodeName string, nodeMemoryAdjustment int64)) *MockClient_GetReservableMemoryBytes_Call {
+func (_c *MockClient_GetReservableMemoryBytes_Call) Run(run func(ctx context.Context, nodeName string, nodeMemoryAdjustment int64, reserveStoppedGuests bool)) *MockClient_GetReservableMemoryBytes_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(int64))
+		run(args[0].(context.Context), args[1].(string), args[2].(int64), args[3].(bool))
 	})
 	return _c
 }
@@ -507,7 +508,7 @@ func (_c *MockClient_GetReservableMemoryBytes_Call) Return(_a0 uint64, _a1 error
 	return _c
 }
 
-func (_c *MockClient_GetReservableMemoryBytes_Call) RunAndReturn(run func(context.Context, string, int64) (uint64, error)) *MockClient_GetReservableMemoryBytes_Call {
+func (_c *MockClient_GetReservableMemoryBytes_Call) RunAndReturn(run func(context.Context, string, int64, bool) (uint64, error)) *MockClient_GetReservableMemoryBytes_Call {
 	_c.Call.Return(run)
 	return _c
 }

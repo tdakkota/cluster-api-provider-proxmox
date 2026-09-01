@@ -185,6 +185,20 @@ type SchedulerHints struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MemoryAdjustment *int64 `json:"memoryAdjustment,omitempty"`
+
+	// reserveStoppedGuestMemory keeps the configured memory of stopped VMs and
+	// containers reserved on a node, as though they were running, so that every
+	// guest already placed on that node could be started at once.
+	//
+	// A stopped guest occupies no host memory, so setting this to false judges a
+	// node by what is actually running on it. That allows placement onto memory
+	// which is free today but would be contended if the stopped guests were
+	// started, so it suits hosts whose stopped guests are abandoned rather than
+	// merely idle.
+	//
+	// Defaults to true, which is the conservative accounting.
+	// +optional
+	ReserveStoppedGuestMemory *bool `json:"reserveStoppedGuestMemory,omitempty"`
 }
 
 // GetMemoryAdjustment returns the memory adjustment percentage to use within the scheduler.
@@ -196,6 +210,16 @@ func (sh *SchedulerHints) GetMemoryAdjustment() int64 {
 	}
 
 	return memoryAdjustment
+}
+
+// ShouldReserveStoppedGuestMemory reports whether stopped guests count against a
+// node's reservable memory.
+func (sh *SchedulerHints) ShouldReserveStoppedGuestMemory() bool {
+	if sh == nil {
+		return true
+	}
+
+	return ptr.Deref(sh.ReserveStoppedGuestMemory, true)
 }
 
 // ProxmoxClusterStatus defines the observed state of a ProxmoxCluster.

@@ -278,7 +278,7 @@ func (c *APIClient) GetTask(ctx context.Context, upID string) (*proxmox.Task, er
 }
 
 // GetReservableMemoryBytes returns the memory that can be reserved by a new VM, in bytes.
-func (c *APIClient) GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64) (uint64, error) {
+func (c *APIClient) GetReservableMemoryBytes(ctx context.Context, nodeName string, nodeMemoryAdjustment int64, reserveStoppedGuests bool) (uint64, error) {
 	node := (&proxmox.Node{}).New(c.Client, nodeName)
 
 	if err := node.Status(ctx); err != nil {
@@ -301,6 +301,9 @@ func (c *APIClient) GetReservableMemoryBytes(ctx context.Context, nodeName strin
 		if vm.Template {
 			continue
 		}
+		if !reserveStoppedGuests && isStoppedGuest(vm.Status) {
+			continue
+		}
 		if reservableMemory < vm.MaxMem {
 			reservableMemory = 0
 		} else {
@@ -314,6 +317,9 @@ func (c *APIClient) GetReservableMemoryBytes(ctx context.Context, nodeName strin
 	}
 
 	for _, ct := range containers {
+		if !reserveStoppedGuests && isStoppedGuest(ct.Status) {
+			continue
+		}
 		if reservableMemory < ct.MaxMem {
 			reservableMemory = 0
 		} else {
@@ -322,6 +328,13 @@ func (c *APIClient) GetReservableMemoryBytes(ctx context.Context, nodeName strin
 	}
 
 	return reservableMemory, nil
+}
+
+// isStoppedGuest reports whether a guest in this state holds no host memory.
+// Only "stopped" qualifies: a paused or suspended guest still has its memory
+// resident, so it is charged in full.
+func isStoppedGuest(status string) bool {
+	return status == "stopped"
 }
 
 // ResizeDisk resizes a VM disk to the specified size.
