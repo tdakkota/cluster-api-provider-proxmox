@@ -239,3 +239,68 @@ func TestSetInClusterIPPoolRef(t *testing.T) {
 	cl.SetInClusterIPPoolRef(pool)
 	require.Equal(t, cl.Status.InClusterIPPoolRef[0].Name, pool.GetName())
 }
+
+func TestAddInClusterZoneRef(t *testing.T) {
+	newPool := func(name, zone, family string) client.Object {
+		labels := map[string]string{}
+		if zone != "" {
+			labels[ProxmoxZoneLabel] = zone
+		}
+
+		return &ipamicv1.InClusterIPPool{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        name,
+				Labels:      labels,
+				Annotations: map[string]string{ProxmoxIPFamilyAnnotation: family},
+			},
+		}
+	}
+
+	t.Run("a second zone does not panic", func(t *testing.T) {
+		cl := ProxmoxCluster{}
+
+		cl.AddInClusterZoneRef(newPool("c-v4-icip", "", IPv4Type))
+		cl.AddInClusterZoneRef(newPool("c-main-v4-icip", "main", IPv4Type))
+
+		require.Len(t, cl.Status.InClusterZoneRef, 2)
+		require.Equal(t, "default", *cl.Status.InClusterZoneRef[0].Zone)
+		require.Equal(t, "c-v4-icip", cl.Status.InClusterZoneRef[0].InClusterIPPoolRefV4.Name)
+		require.Equal(t, "main", *cl.Status.InClusterZoneRef[1].Zone)
+		require.Equal(t, "c-main-v4-icip", cl.Status.InClusterZoneRef[1].InClusterIPPoolRefV4.Name)
+	})
+
+	t.Run("both families land on one zone entry", func(t *testing.T) {
+		cl := ProxmoxCluster{}
+
+		cl.AddInClusterZoneRef(newPool("c-main-v4-icip", "main", IPv4Type))
+		cl.AddInClusterZoneRef(newPool("c-main-v6-icip", "main", IPv6Type))
+
+		require.Len(t, cl.Status.InClusterZoneRef, 1)
+		require.Equal(t, "c-main-v4-icip", cl.Status.InClusterZoneRef[0].InClusterIPPoolRefV4.Name)
+		require.Equal(t, "c-main-v6-icip", cl.Status.InClusterZoneRef[0].InClusterIPPoolRefV6.Name)
+	})
+
+	t.Run("an entry with no zone is skipped, not dereferenced", func(t *testing.T) {
+		cl := ProxmoxCluster{
+			Status: ProxmoxClusterStatus{
+				InClusterZoneRef: []InClusterZoneRef{{Zone: nil}},
+			},
+		}
+
+		cl.AddInClusterZoneRef(newPool("c-main-v4-icip", "main", IPv4Type))
+
+		require.Len(t, cl.Status.InClusterZoneRef, 2)
+		require.Equal(t, "main", *cl.Status.InClusterZoneRef[1].Zone)
+		require.Equal(t, "c-main-v4-icip", cl.Status.InClusterZoneRef[1].InClusterIPPoolRefV4.Name)
+	})
+
+	t.Run("re-adding the same zone updates in place", func(t *testing.T) {
+		cl := ProxmoxCluster{}
+
+		cl.AddInClusterZoneRef(newPool("old", "main", IPv4Type))
+		cl.AddInClusterZoneRef(newPool("new", "main", IPv4Type))
+
+		require.Len(t, cl.Status.InClusterZoneRef, 1)
+		require.Equal(t, "new", cl.Status.InClusterZoneRef[0].InClusterIPPoolRefV4.Name)
+	})
+}
